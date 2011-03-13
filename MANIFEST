@@ -1,0 +1,11 @@
+Changes
+LICENSE
+MANIFEST
+Makefile.PL
+README
+lib/Template/Flute/PDF.pm
+lib/Template/Flute/PDF/Box.pm
+lib/Template/Flute/PDF/Image.pm
+lib/Template/Flute/PDF/Import.pm
+
+META.yml                                 Module meta-data (added by MakeMaker)
