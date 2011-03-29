@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Template-Flute-PDF
-version:            0.0001
+version:            0.0002
 abstract:           PDF generator for HTML templates
 author:
     - Stefan Hornburg (Racke) <racke@linuxia.de>
