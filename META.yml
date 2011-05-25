@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Template-Flute-PDF
-version:            0.0003
+version:            0.0004
 abstract:           PDF generator for HTML templates
 author:
     - Stefan Hornburg (Racke) <racke@linuxia.de>
@@ -15,13 +15,13 @@ requires:
     Image::Size:          0
     PDF::API2:            0
     Template::Flute:      0
-    Template::Flute::Style::CSS:  0.0002
+    Template::Flute::Style::CSS:  0.0003
     Test::More:           0
 no_index:
     directory:
         - t
         - inc
-generated_by:       ExtUtils::MakeMaker version 6.55_02
+generated_by:       ExtUtils::MakeMaker version 6.56
 meta-spec:
     url:      http://module-build.sourceforge.net/META-spec-v1.4.html
     version:  1.4
