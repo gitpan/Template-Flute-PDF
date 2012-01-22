@@ -5,6 +5,10 @@ use warnings;
 
 use Data::Dumper;
 
+use File::Basename;
+use File::Spec;
+use Math::Trig;
+
 use PDF::API2;
 use PDF::API2::Util;
 
@@ -20,11 +24,11 @@ Template::Flute::PDF - PDF generator for HTML templates
 
 =head1 VERSION
 
-Version 0.0004
+Version 0.0024
 
 =cut
 
-our $VERSION = '0.0004';
+our $VERSION = '0.0024';
 
 =head1 SYNOPSIS
 
@@ -37,6 +41,11 @@ our $VERSION = '0.0004';
                                   file => 'invoice.pdf');
 
   $pdf->process();
+
+=head1 DESCRIPTION
+
+Template::Flute::PDF is a PDF generator based on L<Template::Flute>
+and L<PDF::API2>.
 
 =head1 CONSTRUCTOR
 
@@ -113,6 +122,8 @@ sub new {
 	
 	bless ($self, $class);
 }
+
+=head1 METHODS
 
 =head2 process
 
@@ -244,10 +255,13 @@ sub process {
 					  hpos => $self->{border_left});
 	
 #	$self->walk_template($self->{xml});
-	
-	$self->{pdf}->saveas($file);
-	
-	return;
+
+	if ($file) {
+	    $self->{pdf}->saveas($file);
+	    return 1;
+	}
+
+	return $self->{pdf}->stringify;
 }
 
 sub template {
@@ -613,6 +627,57 @@ sub calculate {
 		$height = $lines * $specs->{size};
 	}
 	
+	if (exists $specs->{props}->{rotate}) {
+	    my ($rotate, $radian, $new_height, $new_width);
+
+	    # rotation works other way around compared to CSS
+	    $rotate = 360 - $specs->{props}->{rotate};
+
+	    # determine new width and height of box used for rotated text
+	    $radian = deg2rad($rotate);
+
+	    $new_width = abs($max_width * cos($radian)) + abs($height * sin($radian));
+	    $new_height = abs($max_width * sin($radian)) + abs($height * cos($radian));
+	    
+	    my $corr_w = abs($max_width * cos($radian)) + abs($height * sin($radian));
+	    my $corr_h = $max_width * sin($radian) + $height * cos($radian);
+
+	    $specs->{props}->{correction} = {width => abs($height * sin($radian)), height => - abs($max_width * cos($radian))};
+	    $specs->{props}->{correction} = {width => 0, height => 0};
+
+	    # width correction
+	    if ($rotate <= 90) {
+		$specs->{props}->{correction}->{width} = $height * sin($radian);
+	    }
+	    elsif ($rotate < 180) {
+		$specs->{props}->{correction}->{width} = abs($max_width * cos($radian)) 
+		    + $height * 0.5 * sin($radian);
+            }
+	    elsif ($rotate < 270) {
+		$specs->{props}->{correction}->{width} = abs($max_width * cos($radian)) ;
+	    }
+	    elsif ($rotate) {
+		$specs->{props}->{correction}->{width} = $height + $height * sin($radian); # + $height * sin($radian);
+            }
+
+	    # height correction
+	    if ($rotate < 90) {
+		$specs->{props}->{correction}->{height} = $height * sin($radian) - $max_width * sin($radian);
+	    }
+	    elsif ($rotate <= 180) {
+		$specs->{props}->{correction}->{height} = $height - $max_width * sin($radian);
+	    }
+	    elsif ($rotate <= 270) {
+		$specs->{props}->{correction}->{height} = abs($height * sin($radian));
+	    }
+	    elsif ($rotate < 360) {
+		$specs->{props}->{correction}->{height} = - $height * sin($radian);
+            }
+
+	    $max_width = $new_width;
+	    $height = $new_height;
+        }
+
 	# adjust to fixed width
 	if ($avail_width) {
 		if ($avail_width < $max_width) {
@@ -675,7 +740,7 @@ sub textbox {
 	my ($self, $elt, $boxtext, $boxprops, $box, %atts) = @_;
 	my ($width_last, $y_top, $y_last, $left_over, $text_width, $text_height, $box_height);
 	my (@tb_parms, %parms, $txeng, %offset, %borders, %padding, $props,
-		$paragraph, $specs);
+		$paragraph, $specs, %text_options, $decoration);
 
 	if ($boxprops) {
 		$specs = $boxprops;
@@ -738,10 +803,24 @@ sub textbox {
 
 #print "Add textbox (class " . ($elt->att('class') || "''") . ") with content '$boxtext' at $parms{y} x $parms{x}, border $offset{top}\n";
 
+	if ($decoration = $props->{text}->{decoration}) {
+	    if ($decoration eq 'underline') {
+                $text_options{'-underline'} = 1;
+            }
+	}
+
 	if (length($boxtext) && $boxtext =~ /\S/) {
-		# try different approach
+	    # try different approach
+	    if (exists $props->{rotate}) {
+		$txeng->translate($parms{x} + $props->{correction}->{width}, 
+				  $parms{y} + $props->{correction}->{height},);
+		$txeng->transform_rel(-rotate => 360 - $props->{rotate});
+	    }
+	    else {
 		$txeng->translate($parms{x}, $parms{y});
-		$txeng->text($boxtext);
+	    }
+
+	    $txeng->text($boxtext, %text_options);
 	}
 	else {
 		$y_last = $parms{y};
@@ -794,32 +873,33 @@ sub borders {
 	if ($specs->{borders}->{top}) {
 		$gfx->strokecolor($specs->{props}->{border}->{top}->{color});
 		$gfx->linewidth($specs->{borders}->{top});
-		$gfx->move($x_left, $y_top);
-		$gfx->line($x_left + $width, $y_top);
+		$gfx->move($x_left, $y_top - $specs->{borders}->{top} * 0.5);
+		$gfx->line($x_left + $width, $y_top - $specs->{borders}->{top} * 0.5);
 		$gfx->stroke();
 	}
 
 	if ($specs->{borders}->{left}) {
 		$gfx->strokecolor($specs->{props}->{border}->{left}->{color});
 		$gfx->linewidth($specs->{borders}->{left});
-		$gfx->move($x_left, $y_top);
-		$gfx->line($x_left, $y_top - $height);
+		$gfx->move($x_left + 0.5 * $specs->{borders}->{left}, $y_top);
+		$gfx->line($x_left + 0.5 * $specs->{borders}->{left} , $y_top - $height); #- $specs->{borders}->{top});
+	    
 		$gfx->stroke();
 	}
 	
 	if ($specs->{borders}->{bottom}) {
 		$gfx->strokecolor($specs->{props}->{border}->{bottom}->{color});
 		$gfx->linewidth($specs->{borders}->{bottom});
-		$gfx->move($x_left, $y_top - $height + $specs->{borders}->{bottom});
-		$gfx->line($x_left + $width, $y_top - $height + $specs->{borders}->{bottom});
+		$gfx->move($x_left, $y_top - $height - 1 + 0.5 * $specs->{borders}->{bottom} );
+		$gfx->line($x_left + $width, $y_top - $height - 1 +  0.5 * $specs->{borders}->{bottom} );
 		$gfx->stroke();
 	}
 
 	if ($specs->{borders}->{right}) {
 		$gfx->strokecolor($specs->{props}->{border}->{right}->{color});
 		$gfx->linewidth($specs->{borders}->{right});
-		$gfx->move($x_left + $width, $y_top);
-		$gfx->line($x_left + $width, $y_top - $height);
+		$gfx->move($x_left + $width - 0.5 * $specs->{borders}->{right}, $y_top);
+		$gfx->line($x_left + $width  - 0.5 * $specs->{borders}->{right}, $y_top - $height);
 		$gfx->stroke();
 	}
 }
@@ -846,6 +926,55 @@ sub rect {
 	if ($color) {
 		$gfx->fill();
 	}
+}
+
+=head2 locate_image
+
+Determines location of an image file from the C<src> HTML
+attribute.
+
+    $imgfile = $pdf->locate_image('images/cart.png');
+
+The location is based on the current directory, or on
+the C<html_base> constructor parameter if the C<src> HTML
+attribute contains a single file name only.
+ 
+=cut
+
+sub locate_image {
+    my ($self, $src) = @_;
+    my ($img_dir, $template_dir, $img_file);
+
+    if ($self->{swap_images}) {
+	for my $href (@{$self->{swap_images}}) {
+	    if ($href->{src} eq $src) {
+		$src = $href->{path};
+	    }
+	}
+    }
+
+    $img_dir = dirname($src);
+
+    if ($img_dir eq '.') {
+	# check whether HTML template is located in another directory
+	$template_dir = dirname($self->template()->file());
+
+	if ($template_dir ne '.') {
+	    if ($self->{html_base}) {
+		$img_file = File::Spec->catfile($self->{pdf}->{html_base},
+					   basename($src));
+	    }
+	    else {
+		$img_file = File::Spec->catfile($template_dir,
+						basename($src));
+	    }
+	}
+    }
+    else {
+	$img_file = $src;
+    }
+
+    return $img_file;
 }
 
 =head2 image OBJECT HPOS VPOS WIDTH HEIGHT
@@ -962,7 +1091,7 @@ L<http://search.cpan.org/dist/Template-Flute-PDF/>
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright 2010-2011 Stefan Hornburg (Racke) <racke@linuxia.de>.
+Copyright 2010-2012 Stefan Hornburg (Racke) <racke@linuxia.de>.
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of either: the GNU General Public License as published

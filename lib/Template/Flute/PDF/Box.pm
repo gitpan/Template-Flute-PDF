@@ -175,10 +175,11 @@ sub calculate {
 	}
 
 	if ($self->{gi} eq 'img') {
-		my (@info, $file, %size);
+		my (@info, $src, $file, %size);
 
-		$file = $self->{elt}->att('src');
-		
+		$src = $self->{elt}->att('src');
+		$file = $self->{pdf}->locate_image($src);
+
 		$self->{object} = new Template::Flute::PDF::Image(file => $file,
 														 pdf => $self->{pdf});
 
@@ -236,7 +237,8 @@ sub calculate {
 
 	# processed all childs, now determine my size itself
 
-	my ($max_width, $max_height, $vpos, $hpos, $max_stripe_height, $child) = (0,0,0,0);
+	my ($max_width, $max_height, $vpos, $hpos, 
+	    $max_stripe_height, $max_stripe_width, $child) = (0,0,0,0,0);
 	my ($hpos_next, $vpos_next, @stripes, $stripe_pos, $stripe_base, $clear_after);
 
 	$stripe_base = 0;
@@ -278,6 +280,7 @@ sub calculate {
 		
 		if ($hpos_next > 0) {
 #			print "HORIZ FIT for GI $child->{gi} CLASS $child->{class} ID $child->{id}\n";
+			$max_stripe_width = $hpos_next;
 
 			if ($child->property('float') eq 'right'
 				&& $self->property('float') ne 'right') {
@@ -293,9 +296,9 @@ sub calculate {
 				$hpos = $max_width - $child->{box}->{width};
 				$hpos_next = $max_width;
 			}
-			else {
+			elsif ($max_stripe_width > $max_width) {
 				# add to current width
-				$max_width += $child->{box}->{width};
+				$max_width = $max_stripe_width;
 			}
 
 			# check whether we need to extend the height
@@ -312,12 +315,14 @@ sub calculate {
 			# starting new stripe now
 			$stripe_pos++;
 			$max_stripe_height = 0;
-			
+			$max_stripe_width = 0;
+
 			# stripe base moves to max_height
 			$stripe_base = $max_height;
 		
 			if ($child->{box}->{width} > $max_width) {
 				$max_width = $child->{box}->{width};
+				$max_stripe_width = $max_width;
 			}
 
 			# add to current height
@@ -347,6 +352,7 @@ sub calculate {
 				
 #			print "NEW HPOS from GI $child->{gi} CLASS $child->{class}: $child->{box}->{width}, VPOS $vpos\n";
 			$hpos_next = $child->{box}->{width};
+			$max_stripe_width = $hpos_next;
 		}
 
 		$self->{eltpos}->[$i] = {hpos => $hpos, vpos => -$vpos};
@@ -367,10 +373,6 @@ sub calculate {
 
 		$clear_after = $child->{box}->{clear}->{after};
 	}
-	
-	# add offsets
-	$max_width += $self->{specs}->{offset}->{left} + $self->{specs}->{offset}->{right};
-	$max_height += $self->{specs}->{offset}->{top} + $self->{specs}->{offset}->{bottom};
 
 	# apply fixed dimensions
 	if ($self->{specs}->{props}->{width} > $max_width) {
@@ -380,6 +382,10 @@ sub calculate {
 	if ($self->{specs}->{props}->{height} > $max_height) {
 		$max_height = $self->{specs}->{props}->{height};
 	}
+	
+	# add offsets
+	$max_width += $self->{specs}->{offset}->{left} + $self->{specs}->{offset}->{right};
+	$max_height += $self->{specs}->{offset}->{top} + $self->{specs}->{offset}->{bottom};
 
 	# set up clear properties
 	my $clear = {after => 0, before => 0};
@@ -391,10 +397,16 @@ sub calculate {
 	elsif ($self->{gi} eq 'br') {
 		$clear->{before} = 1;
 	}
-	elsif ($self->{gi} =~ /^h\d$/
-		   || $self->{gi} eq 'p'
-		   || ($self->{gi} eq 'li' && $self->property('list_style') ne 'none')) {
+	elsif ($self->{specs}->{props}->{display} eq 'block'
+	    && $self->property('float') ne 'left') {
+	    $clear->{before} = $clear->{after} = 1;
+	}
+	elsif ($self->{gi} eq 'li') {
+	    unless ($self->property('float') eq 'left'
+		    && $self->property('list_style') eq 'none') {
+		# show list elements vertically
 		$clear->{before} = $clear->{after} = 1;
+	    }
 	}
 
 	$self->{box} = {width => $max_width,
@@ -423,7 +435,9 @@ sub align {
 			# skip over text elements (align only applies to grand children)
 			next if $child->{elt}->is_text();
 			
-			if ($textprops = $child->property('text')) {
+			if (($textprops = $child->property('text'))
+			    || $child->{gi} eq 'center') {
+			   
 				if ($child->property('width')) {
 					$avail_width = $child->property('width');
 				}
@@ -435,6 +449,13 @@ sub align {
 				}
 				else {
 					$avail_width = $child->{box}->{width};
+				}
+
+				if ($child->{gi} eq 'center') {
+				    if ($avail_width > $self->{box}->{width}) {
+					$child->{hoff} += ($avail_width - $self->{box}->{width}) / 2;
+				    }
+				    next;
 				}
 
 				for (my $cpos = 0; $cpos < @{$child->{eltstack}}; $cpos++) {
@@ -585,6 +606,8 @@ sub render {
 	my ($self, %parms) = @_;
 	my ($child, $pos, $page_before, $page_cur);
 
+	$self->{hoff} ||= 0;
+
 #	print "RENDER for  GI $self->{gi}, CLASS $self->{class} on PAGE $self->{page}: " . Dumper(\%parms);
 
 	if (exists $parms{page}
@@ -616,7 +639,7 @@ sub render {
 			$page_before = $page_cur;
 		}
 		
-		$child->render(hpos => $parms{hpos} + $self->{specs}->{offset}->{left} + $pos->{hpos},
+		$child->render(hpos => $parms{hpos} + $self->{specs}->{offset}->{left} + $pos->{hpos} + $self->{hoff},
 					   vpos => $parms{vpos} - $self->{specs}->{offset}->{top} + $pos->{vpos},
 					   page => $pos->{page} || $self->{page},
 					   );
@@ -659,7 +682,7 @@ sub render {
 		$margins = $self->{specs}->{margins};
 
 		# adjust border dimensions by margins
-		$hpos = $parms{hpos} + $margins->{left};
+		$hpos = $parms{hpos} + $margins->{left} + $self->{hoff};
 		$vpos = $parms{vpos} - $margins->{top};
 		$width = $self->{box}->{width} - $margins->{left} - $margins->{right};
 		$height = $self->{box}->{height} - $margins->{top} - $margins->{bottom};
@@ -694,14 +717,14 @@ Setup specifications for this box.
 	
 sub setup_specs {
 	my ($self) = @_;
-	my ($inherit);
+	my ($inherit, $selector_map);
 	
 	if ($self->{parent}) {
 		$inherit = $self->{parent}->{specs}->{props};
 	}
 	
 	# lookup ourselves in selector map from ancestors
-	if ($self->{selector_map}) {
+	if ($selector_map = $self->{parent}->{selector_map}) {
 		my (@selectors);
 		
 		if ($self->{class}) {
@@ -715,9 +738,9 @@ sub setup_specs {
 		}
 
 		for my $key (@selectors) {
-			if ($self->{selector_map}->{$key}) {
+			if ($selector_map->{$key}) {
 				$self->{specs} = $self->{pdf}->setup_text_props($self->{elt},
-														 $self->{selector_map}->{$key}, $inherit);
+														 $selector_map->{$key}, $inherit);
 			}
 		}
 	}
@@ -726,13 +749,43 @@ sub setup_specs {
 	return;
 }
 
+sub _description {
+    my $self = shift;
+    my ($desc, $text, $max_length);
+
+    $max_length = 20;
+
+    $desc = "GI $self->{gi}";
+
+    if ($self->{gi} eq '#PCDATA') {
+	$text = $self->{elt}->text();
+
+	if (length $text > $max_length) {
+	    $text = substr($text, 0, $max_length - 1) . ' ...';
+	}
+
+	$desc .= ", TEXT $text";
+	return $desc;
+    }
+    
+    if ($self->{class}) {
+	$desc .= ", CLASS $self->{class}";
+    }
+
+    if ($self->{id}) {
+	$desc .= ", ID $self->{id}";
+    }
+
+    return $desc;
+};
+
 =head1 AUTHOR
 
 Stefan Hornburg (Racke), <racke@linuxia.de>
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright 2010-2011 Stefan Hornburg (Racke) <racke@linuxia.de>.
+Copyright 2010-2012 Stefan Hornburg (Racke) <racke@linuxia.de>.
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of either: the GNU General Public License as published
