@@ -24,11 +24,11 @@ Template::Flute::PDF - PDF generator for HTML templates
 
 =head1 VERSION
 
-Version 0.0024
+Version 0.0025
 
 =cut
 
-our $VERSION = '0.0024';
+our $VERSION = '0.0025';
 
 =head1 SYNOPSIS
 
@@ -626,57 +626,6 @@ sub calculate {
 	else {
 		$height = $lines * $specs->{size};
 	}
-	
-	if (exists $specs->{props}->{rotate}) {
-	    my ($rotate, $radian, $new_height, $new_width);
-
-	    # rotation works other way around compared to CSS
-	    $rotate = 360 - $specs->{props}->{rotate};
-
-	    # determine new width and height of box used for rotated text
-	    $radian = deg2rad($rotate);
-
-	    $new_width = abs($max_width * cos($radian)) + abs($height * sin($radian));
-	    $new_height = abs($max_width * sin($radian)) + abs($height * cos($radian));
-	    
-	    my $corr_w = abs($max_width * cos($radian)) + abs($height * sin($radian));
-	    my $corr_h = $max_width * sin($radian) + $height * cos($radian);
-
-	    $specs->{props}->{correction} = {width => abs($height * sin($radian)), height => - abs($max_width * cos($radian))};
-	    $specs->{props}->{correction} = {width => 0, height => 0};
-
-	    # width correction
-	    if ($rotate <= 90) {
-		$specs->{props}->{correction}->{width} = $height * sin($radian);
-	    }
-	    elsif ($rotate < 180) {
-		$specs->{props}->{correction}->{width} = abs($max_width * cos($radian)) 
-		    + $height * 0.5 * sin($radian);
-            }
-	    elsif ($rotate < 270) {
-		$specs->{props}->{correction}->{width} = abs($max_width * cos($radian)) ;
-	    }
-	    elsif ($rotate) {
-		$specs->{props}->{correction}->{width} = $height + $height * sin($radian); # + $height * sin($radian);
-            }
-
-	    # height correction
-	    if ($rotate < 90) {
-		$specs->{props}->{correction}->{height} = $height * sin($radian) - $max_width * sin($radian);
-	    }
-	    elsif ($rotate <= 180) {
-		$specs->{props}->{correction}->{height} = $height - $max_width * sin($radian);
-	    }
-	    elsif ($rotate <= 270) {
-		$specs->{props}->{correction}->{height} = abs($height * sin($radian));
-	    }
-	    elsif ($rotate < 360) {
-		$specs->{props}->{correction}->{height} = - $height * sin($radian);
-            }
-
-	    $max_width = $new_width;
-	    $height = $new_height;
-        }
 
 	# adjust to fixed width
 	if ($avail_width) {
@@ -812,8 +761,7 @@ sub textbox {
 	if (length($boxtext) && $boxtext =~ /\S/) {
 	    # try different approach
 	    if (exists $props->{rotate}) {
-		$txeng->translate($parms{x} + $props->{correction}->{width}, 
-				  $parms{y} + $props->{correction}->{height},);
+		$txeng->translate($parms{x}, $parms{y});
 		$txeng->transform_rel(-rotate => 360 - $props->{rotate});
 	    }
 	    else {
@@ -836,24 +784,25 @@ Add horizontal line to PDF.
 =cut
 	
 sub hline {
-	my ($self, $specs, $hpos, $vpos, $length, $width) = @_;
+	my ($self, $specs, $hpos, $vpos, $width, $height) = @_;
 	my ($gfx);
 
 	$gfx = $self->{page}->gfx;
+
+	$self->begin_transform($gfx, $hpos, $vpos - $height / 2, $width, $height || 1, $specs->{props});
 
 	# set line color
 	$gfx->strokecolor($specs->{props}->{color});
 
 	# set line width
-	$gfx->linewidth($width || 1);
-	
-	# starting point
-	$gfx->move($hpos, $vpos);
+	$gfx->linewidth($height || 1);
 
-	$gfx->line($hpos + $length, $vpos);
+	$gfx->line($width, 0);
 	
 	# draw line
 	$gfx->stroke();
+
+	$self->end_transform($gfx, $hpos, $vpos - $height / 2, $width, $height || 1, $specs->{props});
 
 	return;
 }
@@ -996,6 +945,56 @@ sub image {
 	$gfx->image($image_object, $x_left, $y_top, $width, $height);
 }
 
+=head2 begin_transform
+
+Starts transformation of current content object.
+
+=cut
+
+sub begin_transform {
+    my ($self, $gfx, $hpos, $vpos, $width, $height, $props) = @_;
+
+    $gfx->move(0,0);
+ 
+    if (exists $props->{translate}->{x}) {
+	$hpos += to_points($props->{translate}->{x});
+    }
+
+    if (exists $props->{translate}->{y}) {
+	$vpos -= to_points($props->{translate}->{y});
+    }
+
+    $gfx->translate($hpos, $vpos);
+    
+    if ($props->{rotate}) {
+	$gfx->rotate(- $props->{rotate});
+    }
+}
+
+=head2 end_transform
+
+Ends transformation of current content object.
+
+=cut
+
+sub end_transform {
+    my ($self, $gfx, $hpos, $vpos, $width, $height, $props) = @_;
+    
+    if ($props->{rotate}) {
+	$gfx->rotate($props->{rotate});
+    }
+
+    if (exists $props->{translate}->{x}) {
+	$hpos += to_points($props->{translate}->{x});
+    }
+
+    if (exists $props->{translate}->{y}) {
+	$vpos -= to_points($props->{translate}->{y});
+    }
+
+    $gfx->translate(-$hpos, -$vpos);
+}
+
 =head1 FUNCTIONS
 
 =head2 to_points [DEFAULT_UNIT]
@@ -1058,8 +1057,20 @@ Stefan Hornburg (Racke), <racke@linuxia.de>
 
 =head1 BUGS
 
-Please report any bugs or feature requests to C<bug-template-flute-pdf at rt.cpan.org>, or through
-the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Template-Flute-PDF>.
+Certainly a lot, as converting from HTML to PDF is quite complicated and challenging.
+
+Please report any unknown bugs or feature requests to C<bug-template-flute-pdf at rt.cpan.org>,
+or through the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Template-Flute-PDF>.
+
+=head2 KNOWN BUGS
+
+=over 4
+
+=item Background color
+
+Using background color hides text.
+
+=back
 
 =head1 SUPPORT
 
