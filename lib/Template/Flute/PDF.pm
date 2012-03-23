@@ -24,11 +24,11 @@ Template::Flute::PDF - PDF generator for HTML templates
 
 =head1 VERSION
 
-Version 0.0025
+Version 0.0030
 
 =cut
 
-our $VERSION = '0.0025';
+our $VERSION = '0.0030';
 
 =head1 SYNOPSIS
 
@@ -46,6 +46,33 @@ our $VERSION = '0.0025';
 
 Template::Flute::PDF is a PDF generator based on L<Template::Flute>
 and L<PDF::API2>.
+
+=head2 UNITS
+
+Template::Flute::PDF uses the pt unit internally.
+
+In addition, the following units are supported and automatically
+converted by this module:
+
+=over 4
+
+=item in
+
+An inch converts to 72 pt.
+
+=item cm
+
+A centimeter converts to approximately 28.3 pt.
+
+=item mm
+
+A millimeter converts to approximately 2.8 pt.
+
+=item px
+
+A pixel converts to 1 pt.
+
+=back
 
 =head1 CONSTRUCTOR
 
@@ -70,6 +97,28 @@ Page size for the PDF (default: A4).
 =item html_base
 
 Base directory for HTML resources like images and stylesheets.
+
+=back
+
+=head3 Margin parameters
+
+=over 4
+
+=item margin_top
+
+Top margin, defaults to 20.
+
+=item margin_right
+
+Right margin, defaults to 20.
+
+=item margin_bottom
+
+Bottom margin, defaults to 50.
+
+=item margin_left
+
+Left margin, defaults to 20.
 
 =back
 
@@ -113,6 +162,11 @@ sub new {
 		$self->set_page_size(PAGE_SIZE);
 	}
 
+	# page orientation
+	unless ($self->{orientation}) {
+	    $self->{orientation} = '';
+	}
+
 	# margins
 	my @sides = qw(top right bottom left);
 	
@@ -137,11 +191,11 @@ sub process {
 
 	$self->{cur_page} = 1;
 
-	$self->{border_left} = $self->{margin_left};
-	$self->{border_right} = $self->{page_width} - $self->{margin_right};
+	$self->{border_left} = to_points($self->{margin_left}, 'pt');
+	$self->{border_right} = $self->{page_width} - to_points($self->{margin_right}, 'pt');
 
-	$self->{border_top} = $self->{page_height} - $self->{margin_top};
-	$self->{border_bottom} = $self->{margin_bottom};
+	$self->{border_top} = $self->{page_height} - to_points($self->{margin_top}, 'pt');
+	$self->{border_bottom} = to_points($self->{margin_bottom}, 'pt');
 
 	$self->{vpos_next} = $self->{border_top};
 	
@@ -153,7 +207,7 @@ sub process {
 	}
 
 	my %h = $self->{pdf}->info(
-        'Producer'     => "Template::Flute",
+	    'Producer' => "Template::Flute::PDF $VERSION",
 	);
 
 	if ($self->{import}) {
@@ -228,7 +282,12 @@ sub process {
 
 	# move to starting point
 	$self->{page}->text->translate($self->{border_left}, $self->{border_top});
-									
+
+	# page orientation
+	if ($self->{orientation} eq 'landscape') {
+	    $self->{page}->rotate(90);
+	}
+
 	# now walk HTML document and add appropriate parts
 	my ($root_box, @root_parms);
 
@@ -358,7 +417,8 @@ sub content_width {
 	my ($self) = @_;
 	my ($width);
 	
-	$width = $self->{page_width} - $self->{margin_left} - $self->{margin_right};
+	$width = $self->{page_width} - to_points($self->{margin_left}, 'pt') 
+	    - to_points($self->{margin_right}, 'pt');
 
 	return $width;
 }
@@ -469,8 +529,13 @@ sub setup_text_props {
 			
 	$txeng = $self->{page}->text;
 
-	if ($props->{font}->{size} && $props->{font}->{size} =~ s/^(\d+)(pt)?$/$1/) {
+	if ($props->{font}->{size}) {
+	    if ($props->{font}->{size} =~ s/^(\d+)(pt)?$/$1/) {
 		$fontsize =  $props->{font}->{size};
+	    }
+	    else {
+		$fontsize = to_points($props->{font}->{size});
+	    }
 	}
 	else {
 		$fontsize = $self->{fontsize};
@@ -759,6 +824,10 @@ sub textbox {
 	}
 
 	if (length($boxtext) && $boxtext =~ /\S/) {
+	    if ($props->{line_height}) {
+		# adjust text position accordingly
+		$parms{y} -= (to_points($props->{line_height}) - $specs->{size}) / 2;
+	    }
 	    # try different approach
 	    if (exists $props->{rotate}) {
 		$txeng->translate($parms{x}, $parms{y});
@@ -839,8 +908,8 @@ sub borders {
 	if ($specs->{borders}->{bottom}) {
 		$gfx->strokecolor($specs->{props}->{border}->{bottom}->{color});
 		$gfx->linewidth($specs->{borders}->{bottom});
-		$gfx->move($x_left, $y_top - $height - 1 + 0.5 * $specs->{borders}->{bottom} );
-		$gfx->line($x_left + $width, $y_top - $height - 1 +  0.5 * $specs->{borders}->{bottom} );
+		$gfx->move($x_left, $y_top - $height + 0.5 * $specs->{borders}->{bottom} );
+		$gfx->line($x_left + $width, $y_top - $height +  0.5 * $specs->{borders}->{bottom} );
 		$gfx->stroke();
 	}
 
@@ -903,6 +972,7 @@ sub locate_image {
     }
 
     $img_dir = dirname($src);
+    $img_file = $src;
 
     if ($img_dir eq '.') {
 	# check whether HTML template is located in another directory
@@ -918,9 +988,6 @@ sub locate_image {
 						basename($src));
 	    }
 	}
-    }
-    else {
-	$img_file = $src;
     }
 
     return $img_file;
@@ -1005,12 +1072,13 @@ Converts widths to points, default unit is mm.
 	
 sub to_points {
 	my ($width, $default_unit) = @_;
-	my ($unit, $points);
+	my ($unit, $points, $negative);
 
 	return 0 unless defined $width;
 
-	if ($width =~ s/^(\d+(\.\d+)?)\s?(in|px|pt|cm|mm)?$/$1/) {
-		$unit = $3 || $default_unit || 'mm';
+	if ($width =~ s/^(-?)(\d+(\.\d+)?)\s?(in|px|pt|cm|mm)?$/$2/) {
+	    $negative = $1;
+	    $unit = $4 || $default_unit || 'mm';
 	}
 	else {
 		warn "Invalid width $width\n";
@@ -1034,7 +1102,11 @@ sub to_points {
 		$points = $width;
 	}
 
-	return sprintf("%.0f", $points);
+	if ($negative) {
+	    return - $points;
+	}
+
+	return $points;
 }
 
 # auxiliary methods
@@ -1069,6 +1141,12 @@ or through the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue
 =item Background color
 
 Using background color hides text.
+
+=item Vertical align
+
+We currently support only aligning to top or bottom of the available space.
+This is in contradiction to HTML, where the default vertical align 
+is baseline (of the text).
 
 =back
 

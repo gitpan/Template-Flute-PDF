@@ -85,6 +85,9 @@ sub new {
 	# Stripes with child elements
 	$self->{stripes} = [];
 	
+	# Height of these stripes
+	$self->{stripe_heights} = [];
+
 	bless ($self, $class);
 
 	# Create selector map
@@ -143,6 +146,7 @@ From width/height of the image.
 sub calculate {
 	my ($self) = @_;
 	my ($gi, $class, $text, @parms, $childbox, $dim);
+	my ($max_width, $max_height) = (0,0);
 
 	if ($self->{elt}->is_text()) {
 		# simple text box
@@ -178,32 +182,33 @@ sub calculate {
 		my (@info, $src, $file, %size);
 
 		$src = $self->{elt}->att('src');
-		$file = $self->{pdf}->locate_image($src);
 
-		$self->{object} = new Template::Flute::PDF::Image(file => $file,
-														 pdf => $self->{pdf});
+		unless ($src) {
+		    warn "Missing image: ", $self->_description, "\n";
+		    return $self->{box};
+		}
+
+		$file = $self->{pdf}->locate_image($src);
+		$self->{object} = new Template::Flute::PDF::Image(file => $file, pdf => $self->{pdf});
 
 		for my $extent (qw/width height/) {
 			# size from HTML
 			if ($size{$extent}= $self->{elt}->att($extent)) {
-				next;
+			    $self->{object}->$extent(Template::Flute::PDF::to_points($size{$extent}));
+			    next;
 			}
 
 			# size from CSS
 			if ($size{$extent} = $self->property($extent)) {
-				next;
+			    $self->{object}->$extent($size{$extent});
+			    next;
 			}
 
 			# size from image
 			$size{$extent} = $self->{object}->$extent();
 		}
-
-		$self->{box} = {width => $size{width},
-						height => $size{height},
-						clear => {after => 0, before => 0},
-						size => $self->{specs}->{size}};
-		
-		return;
+		$max_width = $size{width};
+		$max_height = $size{height};
 	}
 	
 	for my $child ($self->{elt}->children()) {
@@ -237,8 +242,7 @@ sub calculate {
 
 	# processed all childs, now determine my size itself
 
-	my ($max_width, $max_height, $vpos, $hpos, 
-	    $max_stripe_height, $max_stripe_width, $child) = (0,0,0,0,0);
+	my ($vpos, $hpos, $max_stripe_height, $max_stripe_width, $child) = (0,0,0,0,0);
 	my ($hpos_next, $vpos_next, @stripes, $stripe_pos, $stripe_base, $clear_after);
 
 	$stripe_base = 0;
@@ -310,6 +314,8 @@ sub calculate {
 
 			$max_stripe_height += $height_extend;
 			$max_height += $height_extend;
+
+			$self->{stripe_heights}->[$stripe_pos] = $max_stripe_height;
 		}
 		else {
 			# starting new stripe now
@@ -336,6 +342,8 @@ sub calculate {
 		
 			# stripe height is simply height of this child
 			$max_stripe_height = $child->{box}->{height};
+
+			$self->{stripe_heights}->[$stripe_pos] = $max_stripe_height;
 
 			if ($child->property('float') eq 'right'
 				&& $self->property('float') ne 'right') {
@@ -398,9 +406,17 @@ sub calculate {
 	elsif ($self->{gi} eq 'br') {
 		$clear->{before} = 1;
 	}
-	elsif ($self->{specs}->{props}->{display} eq 'block'
-	    && $self->property('float') ne 'left') {
-	    $clear->{before} = $clear->{after} = 1;
+	elsif ($self->{specs}->{props}->{display} eq 'block') {
+	    if ($self->property('float') eq 'left') {
+		# no change
+	    }
+	    elsif ($self->property('float') eq 'right') {
+		$clear->{before} = 0,
+		$clear->{after} = 1;
+	    }
+	    else {
+		$clear->{before} = $clear->{after} = 1;
+	    }
 	}
 	elsif ($self->{gi} eq 'li') {
 	    unless ($self->property('float') eq 'left'
@@ -415,7 +431,7 @@ sub calculate {
 					clear => $clear,
 					size => $self->{specs}->{size}};
 
-#	print "DIM for GI $self->{gi}, CLASS $self->{class}, ID $self->{id}: " . Dumper($self->{box});
+#	print "DIM for ", $self->_description, ": ",  Dumper($self->{box});
  	return $self->{box};
 }
 
@@ -427,7 +443,7 @@ Aligns boxes (center, left, right).
 
 sub align {
 	my ($self, $offset) = @_;
-	my ($avail_width, $avail_width_text, $textprops, $child, $box_pos);
+	my ($avail_width, $avail_width_text, $textprops, $child, $box_pos, $valign, $valign_space);
 
 	$offset ||= 0;
 	
@@ -436,6 +452,22 @@ sub align {
 			# skip over text elements (align only applies to grand children)
 			next if $child->{elt}->is_text();
 			
+			if ($child->property('display') eq 'block') {
+			    $valign = $child->property('vertical_align') || 'top';
+			}
+			else {
+			    $valign = $child->property('vertical_align') || 'bottom';
+			}
+
+			unless ($valign eq 'top') {
+                            # check whether we have space to move 
+			    $valign_space =  $self->{stripe_heights}->[$i] - $child->{box}->{height};
+
+			    if ($valign_space > 0) {
+				$child->{voff} = $valign_space;
+			    }
+			}
+
 			if (($textprops = $child->property('text'))
 			    || $child->{gi} eq 'center') {
 			   
@@ -608,6 +640,7 @@ sub render {
 	my ($child, $pos, $page_before, $page_cur);
 
 	$self->{hoff} ||= 0;
+	$self->{voff} ||= 0;
 
 #	print "RENDER ", $self->_description, " on PAGE $self->{page}: " . Dumper(\%parms);
 
@@ -641,7 +674,7 @@ sub render {
 		}
 		
 		$child->render(hpos => $parms{hpos} + $self->{specs}->{offset}->{left} + $pos->{hpos} + $self->{hoff},
-					   vpos => $parms{vpos} - $self->{specs}->{offset}->{top} + $pos->{vpos},
+					   vpos => $parms{vpos} - $self->{specs}->{offset}->{top} + $pos->{vpos} - $self->{voff},
 					   page => $pos->{page} || $self->{page},
 					   );
 	}
@@ -657,39 +690,44 @@ sub render {
 								  $self->{specs}, {%parms, hpos => $parms{hpos} + ($self->{hoff} || 0), vpos => $parms{vpos} - ($i * $self->{specs}->{size})},
 								  noborder => 1);
 		}
+		return;
 	}
-	elsif ($self->{gi} eq 'img') {
-		# rendering image
-		if ($self->{object}->{type}) {
-			$self->{pdf}->image($self->{object},
-								$parms{hpos},
-								$parms{vpos} - $self->{box}->{height},
-								$self->{box}->{width},
-								$self->{box}->{height},
-								$self->{specs});
-		}
-	}
-	elsif ($self->{gi} eq 'hr') {
-		# rendering horizontal line
 
-		$self->{pdf}->hline($self->{specs}, $parms{hpos},
-							$parms{vpos} - $self->{specs}->{offset}->{top},
-							$self->{box}->{width}, $self->{specs}->{props}->{height});
-	}
-	else {
-		# render borders
-		my ($hpos, $vpos, $width, $height, $margins);
-		
-		$margins = $self->{specs}->{margins};
+	if ($self->{gi} eq 'hr') {
+	    # rendering horizontal line
 
-		# adjust border dimensions by margins
-		$hpos = $parms{hpos} + $margins->{left} + $self->{hoff};
-		$vpos = $parms{vpos} - $margins->{top};
-		$width = $self->{box}->{width} - $margins->{left} - $margins->{right};
-		$height = $self->{box}->{height} - $margins->{top} - $margins->{bottom};
-		
-		$self->{pdf}->borders($hpos, $vpos, $width, $height, $self->{specs});
+	    $self->{pdf}->hline($self->{specs}, $parms{hpos},
+				$parms{vpos} - $self->{specs}->{offset}->{top},
+				$self->{box}->{width}, $self->{specs}->{props}->{height});
+	    
+	    return;
 	}
+
+	if ($self->{gi} eq 'img') {
+	    # rendering image
+	    if ($self->{object}->{type}) {
+		$self->{pdf}->image($self->{object},
+				    $parms{hpos} + $self->{specs}->{offset}->{left},
+				    $parms{vpos} - $self->{object}->height - $self->{specs}->{offset}->{top},
+				    $self->{object}->width,
+				    $self->{object}->height,
+				    $self->{specs});
+	    }
+	    # fall through to borders
+	}
+
+	# render borders
+	my ($hpos, $vpos, $width, $height, $margins);
+		
+	$margins = $self->{specs}->{margins};
+
+	# adjust border dimensions by margins
+	$hpos = $parms{hpos} + $margins->{left} + $self->{hoff};
+	$vpos = $parms{vpos} - $margins->{top} - $self->{voff};
+	$width = $self->{box}->{width} - $margins->{left} - $margins->{right};
+	$height = $self->{box}->{height} - $margins->{top} - $margins->{bottom};
+		
+	$self->{pdf}->borders($hpos, $vpos, $width, $height, $self->{specs});
 }
 
 =head2 adjust_page PAGE_NUM
@@ -775,6 +813,10 @@ sub _description {
 
     if ($self->{id}) {
 	$desc .= ", ID $self->{id}";
+    }
+
+    if ($self->{gi} eq 'img') {
+	$desc .= ', SRC ' . $self->{elt}->att('src');
     }
 
     return $desc;

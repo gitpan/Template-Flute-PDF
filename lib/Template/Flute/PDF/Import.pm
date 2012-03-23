@@ -66,20 +66,11 @@ sub import {
 	my ($self, %parms) = @_;
 	my ($pdf_import, $pages, $page_in, $page_out, $scale, @mbox, $gfx, $txt, $xo);
 
-	unless ($parms{pdf}) {
-		return;
-	}
-	
-	unless ($parms{file}) {
-		return;
+	unless ($parms{pdf} || $parms{file}) {
+	    return;
 	}
 
-	if ($parms{scale}) {
-		$scale = $parms{scale};
-	}
-	else {
-		$scale = 1;
-	}
+	$scale = $parms{scale} || 1;
 	
 	eval {
 		$pdf_import = PDF::API2->open($parms{file});
@@ -97,14 +88,13 @@ sub import {
 	$parms{end} ||= $pdf_import->pages();
 
 	for (my $i = $parms{start}; $i <= $parms{end}; $i++) {
-		my (@mbox, $new_left, $new_bottom, $left_edge, $bottom, $right_edge, $top, $mdiff);
+		my ($new_left, $new_bottom, $left_edge, $bottom, $right_edge, $top, $mdiff);
 			
 		$page_out = $parms{pdf}->page(0);
 		$page_in = $pdf_import->openpage($i);
 
 		# get original page size
-		@mbox = $page_in->get_mediabox;
-		($left_edge, $bottom, $right_edge, $top) = @mbox;
+		($left_edge, $bottom, $right_edge, $top) = $page_in->get_mediabox;
 
 		# copy page as a form
 		$gfx = $page_out->gfx;
