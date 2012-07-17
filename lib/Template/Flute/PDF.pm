@@ -12,7 +12,6 @@ use Math::Trig;
 use PDF::API2;
 use PDF::API2::Util;
 
-use Template::Flute::HTML::Table;
 use Template::Flute::Style::CSS;
 
 use Template::Flute::PDF::Import;
@@ -24,21 +23,21 @@ Template::Flute::PDF - PDF generator for HTML templates
 
 =head1 VERSION
 
-Version 0.0041
+Version 0.0042
 
 =cut
 
-our $VERSION = '0.0041';
+our $VERSION = '0.0042';
 
 =head1 SYNOPSIS
 
-  $flute = new Template::Flute (specification_file => 'invoice.xml',
-                              template_file => 'invoice.html',
-                              values => \%values);
+  $flute = Template::Flute->new (specification_file => 'invoice.xml',
+                                 template_file => 'invoice.html',
+                                 values => \%values);
   $flute->process();
 
-  $pdf = new Template::Flute::PDF (template => $flute->template(),
-                                  file => 'invoice.pdf');
+  $pdf = Template::Flute::PDF->new (template => $flute->template(),
+                                    file => 'invoice.pdf');
 
   $pdf->process();
 
@@ -46,6 +45,17 @@ our $VERSION = '0.0041';
 
 Template::Flute::PDF is a PDF generator based on L<Template::Flute>
 and L<PDF::API2>.
+
+=head2 OUTPUT
+
+To obtain the PDF as a string instead of writing it to a file,
+please simply leave out the file parameter when creating the Template::Flute::PDF
+object:
+
+   $pdf = Template::Flute::PDF->new (template => $flute->template(),
+                                     file => 'invoice.pdf');
+
+   $pdf_as_string = $pdf->process();
 
 =head2 UNITS
 
@@ -97,6 +107,10 @@ Page size for the PDF (default: A4).
 =item html_base
 
 Base directory for HTML resources like images and stylesheets.
+
+=item import
+
+Import parameters for L<Template::Flute::PDF::Import>.
 
 =back
 
@@ -219,7 +233,7 @@ Processes HTML template and creates PDF file.
 
 sub process {
 	my $self = shift;
-	my ($file, $font, $table);
+	my ($file, $font);
 
     if (@_) {
         $file = shift;
@@ -462,6 +476,46 @@ sub content_width {
 	return $width;
 }
 
+=head2 bounding
+
+Returns the bounding box for the PDF as a hash reference
+with the following key/value pairs:
+
+=over 4
+
+=item vpos
+
+Top vertical position.
+
+=item pos
+
+Left horizonal position.
+
+=item max_w
+
+Maximum width.
+
+=item max_h
+
+Maximum height.
+
+=back
+
+The bounding box defines the available space without
+the borders.
+
+=cut
+
+sub bounding {
+    my $self = shift;
+    
+    return {vpos => $self->{border_top},
+            hpos => $self->{border_left},
+            max_w => $self->{border_right} - $self->{border_left},
+            max_h => $self->{border_top} - $self->{border_bottom},
+    };
+}
+
 =head2 font NAME [weight] [style]
 
 Returns PDF::API2 font object for font NAME, WEIGHT and STYLE are optional.
@@ -550,7 +604,7 @@ sub text_filter {
 		elsif ($transform eq 'capitalize') {
 			$text =~ s/\b(\w)/\u$1/g;
 		}
-		else {
+		elsif ($transform ne 'none') {
 			die "Unknown transformation $transform\n";
 		}
 	}
@@ -1045,7 +1099,7 @@ sub locate_image {
 
 	if ($template_dir ne '.') {
 	    if ($self->{html_base}) {
-		$img_file = File::Spec->catfile($self->{pdf}->{html_base},
+		$img_file = File::Spec->catfile($self->{html_base},
 					   basename($src));
 	    }
 	    else {
@@ -1191,18 +1245,37 @@ sub _font_select {
 
 This is an incomplete list of supported HTML/CSS syntax.
 
-=head2 HTML tags
+=head2 HTML tags and attributes
 
 <i>
-    
-=head2 font-weight
+
+=head3 style
+
+The HTML attribute "style" is not supported.
+
+=head2 CSS properties
+
+=head3 display
+
+The CSS property "display" is not supported.
+
+=head3 font-weight
 
 The values "normal" and "bold" are supported.
 
-=head2 style
+=head3 min-height
 
-The HTML attribute "style" is not supported.
+The CSS property "min-height" is supported.
+
+=head3 min-width
+
+The CSS property "min-width" is supported.
     
+=head3 text-transformation
+
+The CSS property "text-transformation" is supported with
+the exception of the value "inherit".
+
 =head1 AUTHOR
 
 Stefan Hornburg (Racke), <racke@linuxia.de>
